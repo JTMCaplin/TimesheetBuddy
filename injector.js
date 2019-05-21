@@ -1,16 +1,16 @@
 var newScript = document.createElement("script");
 newScript.type = "text/javascript";
-newScript.src = "http://localhost:8000/utils/DataExtractor.js";
+newScript.src = window.damJSDomain + "/utils/DataExtractor.js";
 document.getElementsByTagName("head")[0].appendChild(newScript);
 
 newScript = document.createElement("script");
 newScript.type = "text/javascript";
-newScript.src = "http://localhost:8000/utils/DataConverter.js";
+newScript.src = window.damJSDomain + "/utils/DataConverter.js";
 document.getElementsByTagName("head")[0].appendChild(newScript);
 
 newScript = document.createElement("script");
 newScript.type = "text/javascript";
-newScript.src = "http://localhost:8000/utils/statuses.js";
+newScript.src = window.damJSDomain + "/utils/statuses.js";
 document.getElementsByTagName("head")[0].appendChild(newScript);
 
 var months = {
@@ -72,8 +72,12 @@ function addClickEventsToDate() {
   }
 }
 
-function getCardDiv(jiraId, jiraSummary, timeElapsed, duration, status) {
+function getCardDiv(jiraId, jiraSummary, timeElapsed, duration, status, onclick) {
   var newJiraTicket = document.createElement("div");
+  newJiraTicket.onclick = function() {
+    onclick();
+    newJiraTicket.style.display = "none";
+  }
   newJiraTicket.style =
     "float: left; display:inline-block; margin: 10px; width: 200px; overflow:hidden; border: 1px solid black; padding: 5px;";
 
@@ -120,14 +124,21 @@ function getRowInfo(rowId) {
 }
 
 function setRowData(rowId, data) {
+  for (var i = 0; i < 7; i++) {
+    if (data[i]) {
+      addCellData(rowId, i, Math.round((data[i]) * 100) / 100)
+    }
+  }
+}
+
+function addCellData(rowId, dayOfWeekNum, hoursToAdd) {
   var tableElements = document.getElementById("timesheettable").children;
   var row = tableElements[rowId];
-  for (var i = 0; i < 7; i++) {
-    const box = row.children[0].children[7 + i].children[2].children[0];
-    if (data[i]) {
-      box.value = Math.round(data[i] * 100) / 100;
-      Data_ChangedW(box);
-    }
+  const box = row.children[0].children[7 + dayOfWeekNum].children[2].children[0];
+  var currentHours = Number.parseFloat(box.value) || 0;
+  if (hoursToAdd !== undefined && hoursToAdd !== null) {
+    box.value = currentHours + hoursToAdd;
+    Data_ChangedW(box);
   }
 }
 
@@ -272,6 +283,25 @@ function getAllData(data, days) {
   return dayData;
 }
 
+function checkRowExistsForAllCode(codes) {
+  var rowNum = document.getElementById("timesheettable").children.length;
+  var allCodesAdded = [];
+  for (let i = 0; i < rowNum; i++) {
+    var row = getRowInfo(i);
+    if (row) {
+      allCodesAdded.push(row.phase + " " + row.client + " - " + row.project + "-" + row.stage);
+    }
+  }
+  Array.from(codes).forEach(function(code) {
+    if (allCodesAdded.includes(code)) {
+
+    } else {
+      console.log("This code is missing:", code)
+      alert(("The following code is missing, check console: " + code))
+    }
+  })
+}
+
 function setAllData(data) {
   var rowNum = document.getElementById("timesheettable").children.length;
   for (let i = 0; i < rowNum; i++) {
@@ -281,11 +311,32 @@ function setAllData(data) {
         row.phase + " " + row.client + " - " + row.project + "-" + row.stage;
       var timeData = [];
       for (let j = 0; j < data.length; j++) {
-        timeData.push(data[j].get(code));
+        if (data[j].get(code)) {
+          timeData[j] = data[j].get(code).reduce((a,b) => a + b.hours, 0);
+          data[j].get(code).map(function(e) {
+            addCardFromData(i, e.jira.id, e.jira.summary, (Math.round((e.hours) * 100) / 100), e.startTime+"-"+e.endTime, "statusTBD", i, j)
+          })
+        }
       }
       setRowData(i, timeData);
     }
   }
+}
+
+function addCardFromData(rowId, jiraId, jiraSummary, timeElapsed, duration, status, rowId, dayOfWeekNum) {
+  addCardsToRow(
+    rowId,
+    getCardDiv(
+      jiraId,
+      jiraSummary,
+      timeElapsed + "hrs",
+      duration,
+      status,
+      function() {
+        addCellData(rowId, dayOfWeekNum, 0-timeElapsed);
+    }
+    )
+  );
 }
 
 function handleResponse(response, user) {
@@ -321,137 +372,27 @@ function handleResponse(response, user) {
   var extractedData = extrator.extractData(yourData, user);
   var days = getDays();
   var dayData = getAllData(extractedData, days);
+  var uniqueCodes = dayData.reduce((a,b) => a.concat(a.concat([...b.keys()])), []).reduce(function(set, obj) {
+    set.add(obj)
+    return set;
+  }, new Set());
+  uniqueCodes.delete(null);
+  checkRowExistsForAllCode(uniqueCodes);
+
+  var jirasWithoutCodes = dayData.reduce((a,b) => a.concat(b.get(null) || []), []).reduce((a,b) => a.concat(b.jira.id),[]).reduce(function(set, obj) {
+    set.add(obj)
+    return set;
+  }, new Set());
+  if (jirasWithoutCodes.size > 0) {
+    console.log("The following Jiras have no codes", jirasWithoutCodes);
+    alert(jirasWithoutCodes.size + " Jiras don't have associated timesheet codes. Check console and discuss with your PO or PM");
+  }
+
   setAllData(dayData);
+  window.dayData = dayData;
 
   console.log("Total issues worked on in last 10 days:", data.issues.length);
   console.log("Issues you have worked on in last 10 days:", yourData.length);
-  yourData.map(function(issue) {
-    for (var i = 0; i < issue.changelog.histories.length; i++) {
-      if (
-        issue.changelog.histories[i].items.filter(function(item) {
-          return item.field == "status";
-        }).length > 0
-      ) {
-      } else {
-        if (
-          issue.changelog.histories[i - 1] &&
-          issue.changelog.histories[i - 1].items.filter(function(item) {
-            return item.field == "status";
-          }).length > 0
-        ) {
-          issue.changelog.histories[i].items.push({
-            field: "status",
-            fromString: issue.changelog.histories[i - 1].items
-              .filter(function(item) {
-                return item.field == "status";
-              })
-              .map(function(item) {
-                return item.fromString;
-              })[0],
-            toString: issue.changelog.histories[i - 1].items
-              .filter(function(item) {
-                return item.field == "status";
-              })
-              .map(function(item) {
-                return item.toString;
-              })[0]
-          });
-        }
-      }
-      if (
-        issue.changelog.histories[i].items.filter(function(item) {
-          return item.field == "assignee";
-        }).length > 0
-      ) {
-      } else {
-        if (
-          issue.changelog.histories[i - 1] &&
-          issue.changelog.histories[i - 1].items.filter(function(item) {
-            return item.field == "assignee";
-          }).length > 0
-        ) {
-          issue.changelog.histories[i].items.push({
-            field: "assignee",
-            from: issue.changelog.histories[i - 1].items
-              .filter(function(item) {
-                return item.field == "assignee";
-              })
-              .map(function(item) {
-                return item.from;
-              })[0],
-            to: issue.changelog.histories[i - 1].items
-              .filter(function(item) {
-                return item.field == "assignee";
-              })
-              .map(function(item) {
-                return item.to;
-              })[0]
-          });
-        }
-      }
-    }
-    issue.changelog.histories.map(
-      function(change) {
-        change.items.map(
-          function(fieldChanged) {
-            if (
-              fieldChanged.field == "status" &&
-              change.items.filter(function(item) {
-                return item.field == "assignee";
-              })[0] &&
-              change.items.filter(function(item) {
-                return item.field == "assignee";
-              })[0].to == user
-            ) {
-              for (var i = 0; i < window.last10days.length; i++) {
-                if (
-                  window.sameDay(
-                    window.last10days[i].date,
-                    new Date(Date.parse(change.created))
-                  )
-                ) {
-                  window.last10days[i].events[
-                    issue.key +
-                      ":" +
-                      issue.fields.summary +
-                      ":" +
-                      issue.fields.customfield_11670
-                  ] =
-                    window.last10days[i].events[
-                      issue.key +
-                        ":" +
-                        issue.fields.summary +
-                        ":" +
-                        issue.fields.customfield_11670
-                    ] || [];
-                  window.last10days[i].events[
-                    issue.key +
-                      ":" +
-                      issue.fields.summary +
-                      ":" +
-                      issue.fields.customfield_11670
-                  ].push({
-                    toString: function() {
-                      return (
-                        this.event +
-                        " - " +
-                        this.time.getHours() +
-                        ":" +
-                        this.time.getMinutes()
-                      );
-                    },
-                    event:
-                      fieldChanged.fromString + " -> " + fieldChanged.toString,
-                    time: new Date(Date.parse(change.created))
-                  });
-                }
-              }
-            }
-          }.bind(this)
-        );
-      }.bind(this)
-    );
-  });
 
   window.days = [
     "Sunday",
@@ -476,58 +417,6 @@ function handleResponse(response, user) {
     "November",
     "December"
   ];
-
-  window.last10days.map(function(day) {
-    console.log(
-      window.days[day.date.getDay()],
-      day.date.getDate(),
-      window.months[day.date.getMonth()]
-    );
-    Object.keys(day.events).forEach(function(jiraId, index) {
-      console.log(" ", jiraId);
-      var jira = day.events[jiraId];
-      jira.map(function(event) {
-        var rowId = getRowIdFromTimesheet(jiraId.split(":")[2]);
-        console.log(rowId, jira, jiraId);
-        if (rowId > -1) {
-          addCardsToRow(
-            rowId,
-            getCardDiv(
-              jiraId.split(":")[0],
-              jiraId.split(":")[1],
-              "???hrs",
-              event.time
-                .toString()
-                .split(" ")
-                .slice(0, 5)
-                .join(" ") + "-???",
-              event.event.split("->")[1].trim()
-            )
-          );
-        } else {
-          addCardsToRow(
-            0,
-            getCardDiv(
-              jiraId.split(":")[0],
-              jiraId.split(":")[1],
-              "???hrs",
-              event.time
-                .toString()
-                .split(" ")
-                .slice(0, 5)
-                .join(" ") + "-???",
-              event.event.split("->")[1].trim()
-            )
-          );
-        }
-
-        //   console.log(jiraId.split(":")[2]);
-        //   if (getRowInfo(5))
-        //   console.log(getRowInfo(5).phase + " " + getRowInfo(5).client + " - " + getRowInfo(5).project + "-" + getRowInfo(5).stage)
-        console.log("  ", event.toString());
-      });
-    });
-  });
 }
 
 getDataWithJSON = function(callback, username, password, requestUrl) {
